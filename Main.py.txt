@@ -1,0 +1,81 @@
+import pandas as pd
+import numpy as np
+import requests
+import schedule
+import time
+from datetime import datetime
+from sklearn.neural_network import MLPClassifier
+from telegram import Bot
+
+# ====================== CONFIGURACIÓN ======================
+TOKEN = '7973912924:AAGkIOYd6DMbTfQyEsDn8a8K8oNMxkgXqPc'
+CHAT_ID = '-4873547081'
+SYMBOL = 'EURUSDT'
+INTERVAL = '1m'
+bot = Bot(token=TOKEN)
+
+# ====================== VARIABLES DE ESTADO ======================
+X_train, y_train = [], []
+model = MLPClassifier(hidden_layer_sizes=(10,), max_iter=1000)
+prediction_history = []
+
+# ====================== FUNCIÓN DE DESCARGA ======================
+def get_binance_data(symbol, interval, limit=100):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    data = requests.get(url).json()
+    df = pd.DataFrame(data, columns=[
+        'time', 'open', 'high', 'low', 'close', 'volume',
+        '_', '_', '_', '_', '_', '_'
+    ])
+    df['close'] = df['close'].astype(float)
+    df['return'] = df['close'].pct_change()
+    df.dropna(inplace=True)
+    return df
+
+# ====================== FUNCIÓN DE ENTRENAMIENTO ======================
+def train_model():
+    global X_train, y_train, model
+    df = get_binance_data(SYMBOL, INTERVAL, limit=200)
+    df['target'] = (df['return'].shift(-1) > 0).astype(int)
+    df.dropna(inplace=True)
+    X = df[['return']].values
+    y = df['target'].values
+    X_train, y_train = X, y
+    model.fit(X, y)
+
+# ====================== FUNCIÓN DE PREDICCIÓN ======================
+def make_prediction():
+    global prediction_history
+
+    df = get_binance_data(SYMBOL, INTERVAL, limit=5)
+    latest_return = df['return'].values[-1].reshape(-1, 1)
+    prediction = model.predict(latest_return)[0]
+    
+    now = datetime.now().strftime("%H:%M:%S")
+    direction = "🔼 SUBE" if prediction == 1 else "🔽 BAJA"
+    message = f"📈 Señal para los próximos 5 minutos\n🕒 {now}\n\n🔹 EURUSDT: {direction}"
+
+    try:
+        bot.send_message(chat_id=CHAT_ID, text=message)
+        prediction_history.append((prediction, df['return'].values[-1] > 0))
+
+        # Cada 10 señales, evaluar aciertos
+        if len(prediction_history) >= 10:
+            wins = sum(p == actual for p, actual in prediction_history[-10:])
+            losses = 10 - wins
+            result_msg = f"✅ EVALUACIÓN DE 10 PREDICCIONES\nEURUSDT: WIN = {wins} - LOSS = {losses}"
+            bot.send_message(chat_id=CHAT_ID, text=result_msg)
+    except Exception as e:
+        print("Error al enviar mensaje:", e)
+
+# ====================== PROGRAMA PRINCIPAL ======================
+def main():
+    train_model()
+    schedule.every(10).minutes.do(make_prediction)
+
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+if __name__ == '__main__':
+    main()
