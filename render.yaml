@@ -1,0 +1,6 @@
+services:
+  - type: worker
+    name: bot-prediccion-eurusdt
+    env: python
+    startCommand: "python main.py"
+    autoDeploy: true
